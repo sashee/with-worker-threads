@@ -1,6 +1,6 @@
 {
   "name": "with-worker-threads",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Spawn worker threads that are closed when the function returns",
   "main": "dist/index.js",
   "type": "module",

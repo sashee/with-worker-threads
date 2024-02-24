@@ -47,6 +47,7 @@ const makeWorkerPool = <PoolOperations extends {[operation: string]: (...args: a
 			const handleAbort = () => {
 				reject(closed.signal.reason);
 			}
+			// TODO: event emitter warning fix
 			closed.signal.addEventListener("abort", handleAbort);
 			promise.catch(() => {}).then(() => closed.signal.removeEventListener("abort", handleAbort));
 			const availableWorker = workers.filter(({tasks}) => tasks.length < (options?.maxUtilization ?? 1)).sort((a, b) => a.tasks.length - b.tasks.length)[0];

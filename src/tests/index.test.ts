@@ -5,7 +5,7 @@ import path from "node:path";
 import url from "node:url";
 import util from "node:util";
 import {hello, div, helloBuffer, withPort} from "./worker.js";
-import {withPool} from "../index.js";
+import {withWorkerThreads} from "../index.js";
 
 export type Pool = {
 	hello: typeof hello,
@@ -24,7 +24,7 @@ process.on('unhandledRejection', (error, p) => {
 
 describe("basic", () => {
 	it("allows calling the worker thread pool with simple data", async () => {
-		await withPool<Pool>({
+		await withWorkerThreads<Pool>({
 			hello: (task) => (...args) => task(args),
 			div: (task) => (...args) => task(args),
 			helloBuffer: (task) => (...args) => task(args),
@@ -35,7 +35,7 @@ describe("basic", () => {
 		})
 	});
 	it("allows multiple arguments", async () => {
-		await withPool<Pool>({
+		await withWorkerThreads<Pool>({
 			hello: (task) => (...args) => task(args),
 			div: (task) => (...args) => task(args),
 			helloBuffer: (task) => (...args) => task(args),
@@ -46,7 +46,7 @@ describe("basic", () => {
 		})
 	});
 	it("propagates exceptions", async () => {
-		await withPool<Pool>({
+		await withWorkerThreads<Pool>({
 			hello: (task) => (...args) => task(args),
 			div: (task) => (...args) => task(args),
 			helloBuffer: (task) => (...args) => task(args),
@@ -56,7 +56,7 @@ describe("basic", () => {
 		})
 	});
 	it("handles transferred results", async () => {
-		await withPool<Pool>({
+		await withWorkerThreads<Pool>({
 			hello: (task) => (...args) => task(args),
 			div: (task) => (...args) => task(args),
 			helloBuffer: (task) => (...args) => task(args),
@@ -67,7 +67,7 @@ describe("basic", () => {
 		})
 	});
 	it("allows transferring parameters", async () => {
-		await withPool<Pool>({
+		await withWorkerThreads<Pool>({
 			hello: (task) => (...args) => task(args),
 			div: (task) => (...args) => task(args),
 			helloBuffer: (task) => (...args) => task(args),

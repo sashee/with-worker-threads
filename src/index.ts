@@ -93,7 +93,7 @@ const makeWorkerPool = <PoolOperations extends {[operation: string]: (...args: a
 	};
 }
 
-export const withPool = <PoolOperations extends {[operation: string]: (...args: any) => any}> (
+export const withWorkerThreads = <PoolOperations extends {[operation: string]: (...args: any) => any}> (
 	taskCaller: {[Property in keyof PoolOperations]: (task: (args: Parameters<PoolOperations[Property]>, transferList?: Transferable[]) => ReturnType<PoolOperations[Property]>) => (...args: Parameters<PoolOperations[Property]>) => ReturnType<PoolOperations[Property]>}
 ) => (
 	...options: Parameters<typeof makeWorkerPool>

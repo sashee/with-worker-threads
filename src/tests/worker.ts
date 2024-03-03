@@ -1,4 +1,4 @@
-import {isMainThread, parentPort} from "node:worker_threads";
+import {isMainThread, parentPort, BroadcastChannel, threadId} from "node:worker_threads";
 import {Pool} from "./index.test.js";
 
 export const hello = async (name: string): Promise<string> => {
@@ -40,6 +40,31 @@ export const withPort = async (port: MessagePort, param: string): Promise<string
 	return processed + "!";
 }
 
+export const externalControlled = async (channelName: string): Promise<string> => {
+	const withResolvers = <T> () => {
+		let resolve: (val: Promise<T> | T) => void, reject: (reason: any) => void;
+		const promise = new Promise<T>((res, rej) => {
+			resolve = res;
+			reject = rej;
+		});
+		return {promise, resolve: resolve!, reject: reject!};
+	}
+	const {promise, resolve, reject} = withResolvers<string>();
+
+	const bc = new BroadcastChannel(channelName);
+	bc.onmessage = (msg: any) => {
+		if (msg.data.type === "close") {
+			bc.close();
+		}else if (msg.data.type === "resolve") {
+			resolve(msg.data.result);
+		}else if (msg.data.type === "reject") {
+			reject(msg.data.reason);
+		}
+	};
+	bc.postMessage({type: "started", threadId});
+	return promise;
+}
+
 if (!isMainThread) {
 	parentPort!.on("message", async <T extends keyof Pool> ({close, operation, args, port}: {close: true, operation: undefined, args: undefined, port: undefined} | {close: undefined, operation: T, args: Parameters<Pool[T]>, port: MessagePort}) => {
 		try {
@@ -64,6 +89,11 @@ if (!isMainThread) {
 					}
 					case "withPort": {
 						const res = await withPort(...args as Parameters<Pool["withPort"]>);
+						port.postMessage({result: res}, []);
+						break;
+					}
+					case "externalControlled": {
+						const res = await externalControlled(...args as Parameters<Pool["externalControlled"]>);
 						port.postMessage({result: res}, []);
 						break;
 					}

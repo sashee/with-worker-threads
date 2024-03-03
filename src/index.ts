@@ -27,7 +27,7 @@ const makeWorkerPool = <PoolOperations extends {[operation: string]: (...args: a
 		const task = Symbol();
 		workerObj.tasks.push(task);
 
-		Promise.resolve(fn(workerObj.worker)).then(resolve, reject);
+		await Promise.resolve(fn(workerObj.worker)).then(resolve, reject).catch(() => {});
 
 		workerObj.tasks.splice(workerObj.tasks.indexOf(task), 1);
 		if(pending.length > 0) {
@@ -35,6 +35,10 @@ const makeWorkerPool = <PoolOperations extends {[operation: string]: (...args: a
 			await runTask(workerObj, nextTask.task, nextTask.resolve, nextTask.reject);
 		}
 	}
+	const abortQueue = new Map() as Map<symbol, () => unknown>;
+	closed.signal.addEventListener("abort", () => {
+		abortQueue.forEach((fn) => fn());
+	});
 	const postTask = async <T> (fn: (worker: Worker) => T) => {
 		if (closed.signal.aborted) {
 			return Promise.reject(closed.signal.reason);
@@ -44,12 +48,9 @@ const makeWorkerPool = <PoolOperations extends {[operation: string]: (...args: a
 			type AsyncOrSyncType<AsyncOrSyncType> = AsyncOrSyncType extends AsyncOrSync<infer Type> ? Type : never;
 
 			const {promise, resolve, reject} = withResolvers<AsyncOrSyncType<ReturnType<typeof fn>>>();
-			const handleAbort = () => {
-				reject(closed.signal.reason);
-			}
-			// TODO: event emitter warning fix
-			closed.signal.addEventListener("abort", handleAbort);
-			promise.catch(() => {}).then(() => closed.signal.removeEventListener("abort", handleAbort));
+			const abortSymbol = Symbol();
+			abortQueue.set(abortSymbol, () => reject(closed.signal.reason));
+			promise.catch(() => {}).then(() => abortQueue.delete(abortSymbol));
 			const availableWorker = workers.filter(({tasks}) => tasks.length < (options?.maxUtilization ?? 1)).sort((a, b) => a.tasks.length - b.tasks.length)[0];
 			if (availableWorker) {
 				runTask(availableWorker, fn, resolve, reject);

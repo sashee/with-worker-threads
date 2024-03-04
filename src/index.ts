@@ -1,7 +1,16 @@
-import {isMainThread, Worker} from "node:worker_threads";
+import {isMainThread, Worker, parentPort} from "node:worker_threads";
 import {availableParallelism} from "node:os";
 
-const makeWorkerPool = <PoolOperations extends {[operation: string]: (...args: any) => any}> (path: string, options?: {concurrency?: number, maxUtilization?: number}) => {
+type PoolOp = {
+	external: (...args: any) => any, internal: (...args: any) => any
+};
+
+type PoolOperationConfig = PoolOp | ((...args: any) => any);
+
+type InternalOperation <T extends PoolOperationConfig> = T extends PoolOp ? T["internal"] : T;
+type ExternalOperation <T extends PoolOperationConfig> = T extends PoolOp ? T["external"] : T;
+
+const makeWorkerPool = <PoolOperations extends {[operation: string]: PoolOperationConfig}> (path: string, options?: {concurrency?: number, maxUtilization?: number}) => {
 	const closed = new AbortController();
 	const workers = Array(options?.concurrency ?? availableParallelism()).fill(null).map(() => {
 		const worker = new Worker(path);
@@ -61,9 +70,9 @@ const makeWorkerPool = <PoolOperations extends {[operation: string]: (...args: a
 		}
 	}
 	return {
-		task: <T extends keyof PoolOperations> (operation: T) => async (args: Parameters<PoolOperations[T]>, transferList: Transferable[]): Promise<Awaited<ReturnType<PoolOperations[T]>>> => {
+		task: <T extends keyof PoolOperations> (operation: T) => async (args: Parameters<InternalOperation<PoolOperations[T]>>, transferList: Transferable[]): Promise<Awaited<ReturnType<ExternalOperation<PoolOperations[T]>>>> => {
 			return postTask((worker) => {
-				return new Promise<Awaited<ReturnType<PoolOperations[T]>>>((res, rej) => {
+				return new Promise<Awaited<ReturnType<ExternalOperation<PoolOperations[T]>>>>((res, rej) => {
 					const channel = new MessageChannel(); 
 
 					channel.port1.onmessage = ({data}) => {
@@ -95,11 +104,11 @@ const makeWorkerPool = <PoolOperations extends {[operation: string]: (...args: a
 	};
 }
 
-export const withWorkerThreads = <PoolOperations extends {[operation: string]: (...args: any) => any}> (
-	taskCaller: {[Property in keyof PoolOperations]: (task: (args: Parameters<PoolOperations[Property]>, transferList?: Transferable[]) => ReturnType<PoolOperations[Property]>) => (...args: Parameters<PoolOperations[Property]>) => ReturnType<PoolOperations[Property]>}
+export const withWorkerThreads = <PoolOperations extends {[operation: string]: PoolOperationConfig}> (
+	taskCaller: {[Property in keyof PoolOperations]: (task: (args: Parameters<InternalOperation<PoolOperations[Property]>>, transferList?: Transferable[]) => ReturnType<InternalOperation<PoolOperations[Property]>>) => (...args: Parameters<ExternalOperation<PoolOperations[Property]>>) => ReturnType<ExternalOperation<PoolOperations[Property]>>}
 ) => (
 	...options: Parameters<typeof makeWorkerPool>
-) => async <T> (fn: (pool?: PoolOperations) => T): Promise<Awaited<T>> => {
+) => async <T> (fn: (pool?: {[Property in keyof PoolOperations]: ExternalOperation<PoolOperations[Property]>}) => T): Promise<Awaited<T>> => {
 		if (isMainThread) {
 		const workerpool = makeWorkerPool<PoolOperations>(...options);
 		try {
@@ -112,5 +121,28 @@ export const withWorkerThreads = <PoolOperations extends {[operation: string]: (
 		}
 	}else {
 		return await fn(undefined);
+	}
+}
+
+export const implementWorker = <PoolOperations extends {[operation: string]: PoolOperationConfig}> (
+	operations: {[Property in keyof PoolOperations]: (...args: Parameters<InternalOperation<PoolOperations[Property]>>) => Promise<{result: Awaited<ReturnType<InternalOperation<PoolOperations[Property]>>>, transfer?: Transferable[]}> | ReturnType<InternalOperation<PoolOperations[Property]>>}
+) => {
+	if (!isMainThread) {
+		parentPort!.on("message", async <T extends keyof PoolOperations> ({close, operation, args, port}: {close: true, operation: undefined, args: undefined, port: undefined} | {close: undefined, operation: T, args: Parameters<InternalOperation<PoolOperations[T]>>, port: MessagePort}) => {
+			try {
+				if (close) {
+					parentPort!.close();
+				}else {
+					const res = await operations[operation](...args);
+					if (typeof res === "object" && "result" in res) {
+						port.postMessage({result: res.result}, res.transfer ?? []);
+					}else {
+						port.postMessage({result: res}, []);
+					}
+				}
+			}catch(e) {
+				port?.postMessage({error: e});
+			}
+		});
 	}
 }

@@ -1,5 +1,6 @@
-import {isMainThread, parentPort, BroadcastChannel, threadId} from "node:worker_threads";
+import {BroadcastChannel, threadId} from "node:worker_threads";
 import {Pool} from "./index.test.js";
+import {implementWorker} from "../index.js";
 
 export const hello = async (name: string): Promise<string> => {
 	return "Hello " + name + "!";
@@ -14,7 +15,7 @@ export const div = async (a: number, b: number): Promise<number> => {
 }
 
 const bufferToArrayBuffer = (buffer: Buffer) => {
-	// force copy the underlying arraybuffer as it can be cached in the with-file-cache memoryCache
+	// force copy the underlying arraybuffer
 	return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
 }
 
@@ -65,44 +66,40 @@ export const externalControlled = async (channelName: string): Promise<string> =
 	return promise;
 }
 
-if (!isMainThread) {
-	parentPort!.on("message", async <T extends keyof Pool> ({close, operation, args, port}: {close: true, operation: undefined, args: undefined, port: undefined} | {close: undefined, operation: T, args: Parameters<Pool[T]>, port: MessagePort}) => {
-		try {
-			if (close) {
-				parentPort!.close();
-			}else {
-				switch(operation) {
-					case "hello": {
-						const res = await hello(...args as Parameters<Pool["hello"]>);
-						port.postMessage({result: res});
-						break;
-					}
-					case "div": {
-						const res = await div(...args as Parameters<Pool["div"]>);
-						port.postMessage({result: res});
-						break;
-					}
-					case "helloBuffer": {
-						const res = await helloBuffer(...args as Parameters<Pool["helloBuffer"]>);
-						port.postMessage({result: res}, [res]);
-						break;
-					}
-					case "withPort": {
-						const res = await withPort(...args as Parameters<Pool["withPort"]>);
-						port.postMessage({result: res}, []);
-						break;
-					}
-					case "externalControlled": {
-						const res = await externalControlled(...args as Parameters<Pool["externalControlled"]>);
-						port.postMessage({result: res}, []);
-						break;
-					}
-					default:
-						throw new Error("Unknown operation: " + operation)
-				}
-			}
-		}catch(e) {
-			port?.postMessage({error: e});
+export const returnPort = async (name: string): Promise<{port: MessagePort, result: string}> => {
+	const createPort = () => {
+		const channel = new MessageChannel();
+		channel.port2.onmessage = async ({data: msg}) => {
+			channel.port2.postMessage(`Hello ${name}! [${msg}]`);
 		}
-	});
+		return channel.port1;
+	}
+
+	return {
+		result: `[${name}]`,
+		port: createPort(),
+	};
 }
+
+implementWorker<Pool>({
+	hello: async (...args) => hello(...args),
+	div: async (...args) => div(...args),
+	helloBuffer: async (...args) => {
+		const res = await helloBuffer(...args);
+		return {
+			result: res,
+			transfer: [res],
+		};
+	},
+	withPort: async (...args) => withPort(...args),
+	externalControlled: async (...args) => externalControlled(...args),
+	transformedHello: async (...args) => hello(...args),
+	returnPort: async (...args) => {
+		const res = await returnPort(...args);
+		return {
+			result: res,
+			//transfer: [res.port],
+		};
+	}
+});
+

@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import url from "node:url";
 import util from "node:util";
-import {hello, div, helloBuffer, withPort, externalControlled} from "./worker.js";
+import {hello, div, helloBuffer, withPort, externalControlled, returnPort} from "./worker.js";
 import {withWorkerThreads} from "../index.js";
 import {BroadcastChannel} from "node:worker_threads";
 import {setTimeout} from "node:timers/promises";
@@ -15,6 +15,8 @@ export type Pool = {
 	helloBuffer: typeof helloBuffer,
 	withPort: typeof withPort,
 	externalControlled: typeof externalControlled,
+	transformedHello: {external: (opts: {name: string}) => Promise<{result: string}>, internal: typeof hello},
+	returnPort: typeof returnPort,
 };
 
 const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
@@ -34,62 +36,68 @@ const withResolvers = <T> () => {
 	return {promise, resolve: resolve!, reject: reject!};
 }
 
+const baseOperations: Parameters<typeof withWorkerThreads<Pool>>[0] = {
+	hello: (task) => (...args) => task(args),
+	div: (task) => (...args) => task(args),
+	helloBuffer: (task) => (...args) => task(args),
+	withPort: (task) => (port, ...rest) => task([port, ...rest], [port]),
+	externalControlled: (task) => (...args) => task(args),
+	transformedHello: (task) => async (opts) => {
+		const name = opts.name;
+		const res = await task([name]);
+		return {result: res};
+	},
+	returnPort: (task) => (...args) => task(args),
+};
+
 describe("basic", () => {
 	it("allows calling the worker thread pool with simple data", async () => {
-		await withWorkerThreads<Pool>({
-			hello: (task) => (...args) => task(args),
-			div: (task) => (...args) => task(args),
-			helloBuffer: (task) => (...args) => task(args),
-			withPort: (task) => (port, ...rest) => task([port, ...rest], [port]),
-			externalControlled: (task) => (...args) => task(args),
-		})(path.join(__dirname, "worker.js"), {concurrency: 1})(async (pool) => {
+		await withWorkerThreads<Pool>(baseOperations)(path.join(__dirname, "worker.js"), {concurrency: 1})(async (pool) => {
 			const result = await pool!.hello("World");
 			assert.equal(result, "Hello World!");
 		})
 	});
 	it("allows multiple arguments", async () => {
-		await withWorkerThreads<Pool>({
-			hello: (task) => (...args) => task(args),
-			div: (task) => (...args) => task(args),
-			helloBuffer: (task) => (...args) => task(args),
-			withPort: (task) => (port, ...rest) => task([port, ...rest], [port]),
-			externalControlled: (task) => (...args) => task(args),
-		})(path.join(__dirname, "worker.js"), {concurrency: 1})(async (pool) => {
+		await withWorkerThreads<Pool>(baseOperations)(path.join(__dirname, "worker.js"), {concurrency: 1})(async (pool) => {
 			const result = await pool!.div(4,2);
 			assert.equal(result, 2);
 		})
 	});
 	it("propagates exceptions", async () => {
-		await withWorkerThreads<Pool>({
-			hello: (task) => (...args) => task(args),
-			div: (task) => (...args) => task(args),
-			helloBuffer: (task) => (...args) => task(args),
-			withPort: (task) => (port, ...rest) => task([port, ...rest], [port]),
-			externalControlled: (task) => (...args) => task(args),
-		})(path.join(__dirname, "worker.js"), {concurrency: 1})(async (pool) => {
+		await withWorkerThreads<Pool>(baseOperations)(path.join(__dirname, "worker.js"), {concurrency: 1})(async (pool) => {
 			await assert.rejects(pool!.div(4,0));
 		})
 	});
-	it("handles transferred results", async () => {
-		await withWorkerThreads<Pool>({
-			hello: (task) => (...args) => task(args),
-			div: (task) => (...args) => task(args),
-			helloBuffer: (task) => (...args) => task(args),
-			withPort: (task) => (port, ...rest) => task([port, ...rest], [port]),
-			externalControlled: (task) => (...args) => task(args),
-		})(path.join(__dirname, "worker.js"), {concurrency: 1})(async (pool) => {
+	it("handles transferred results: ArrayBuffer", async () => {
+		await withWorkerThreads<Pool>(baseOperations)(path.join(__dirname, "worker.js"), {concurrency: 1})(async (pool) => {
 			const result = await pool!.helloBuffer("World");
 			assert.equal(Buffer.from(result).toString("utf8"), "Hello World!");
 		})
 	});
+	it("handles transferred results: MessagePort", async () => {
+		await withWorkerThreads<Pool>(baseOperations)(path.join(__dirname, "worker.js"), {concurrency: 1})(async (pool) => {
+			const {result, port} = await pool!.returnPort("World");
+			assert.equal(result, "[World]");
+			await Promise.race([
+				new Promise((res, rej) => {
+					port.onmessage = ({data: msg}) => {
+						try {
+							assert.equal(msg, "Hello World! [abc]");
+							res(msg);
+						}catch(e) {
+							rej(e);
+						}finally {
+							port.close();
+						}
+					}
+					port.postMessage("abc");
+				}),
+				setTimeout(1000).then(() => {throw new Error("Timeout")}),
+			]);
+		})
+	});
 	it("allows transferring parameters", async () => {
-		await withWorkerThreads<Pool>({
-			hello: (task) => (...args) => task(args),
-			div: (task) => (...args) => task(args),
-			helloBuffer: (task) => (...args) => task(args),
-			withPort: (task) => (port, ...rest) => task([port, ...rest], [port]),
-			externalControlled: (task) => (...args) => task(args),
-		})(path.join(__dirname, "worker.js"), {concurrency: 1})(async (pool) => {
+		await withWorkerThreads<Pool>(baseOperations)(path.join(__dirname, "worker.js"), {concurrency: 1})(async (pool) => {
 			const createPort = () => {
 				const channel = new MessageChannel();
 				channel.port2.onmessage = async ({data: msg, ports}) => {
@@ -108,17 +116,17 @@ describe("basic", () => {
 			assert.equal(result, "[Hello World]!");
 		})
 	});
+	it("supports different interfaces for the worker function and the pool function", async () => {
+		await withWorkerThreads<Pool>(baseOperations)(path.join(__dirname, "worker.js"), {concurrency: 1})(async (pool) => {
+			const result = await pool!.transformedHello({name: "World"});
+			assert.equal(result.result, "Hello World!");
+		})
+	});
 });
 
 describe("timing", () => {
 	it("executes only one task per thread", async () => {
-		await withWorkerThreads<Pool>({
-			hello: (task) => (...args) => task(args),
-			div: (task) => (...args) => task(args),
-			helloBuffer: (task) => (...args) => task(args),
-			withPort: (task) => (port, ...rest) => task([port, ...rest], [port]),
-			externalControlled: (task) => (...args) => task(args),
-		})(path.join(__dirname, "worker.js"), {concurrency: 1})(async (pool) => {
+		await withWorkerThreads<Pool>(baseOperations)(path.join(__dirname, "worker.js"), {concurrency: 1})(async (pool) => {
 			const bcName = crypto.randomUUID();
 			const bc = new BroadcastChannel(bcName);
 			const resultProm = pool!.externalControlled(bcName);
@@ -175,13 +183,7 @@ describe("timing", () => {
 		const bcName = crypto.randomUUID();
 		const bc = new BroadcastChannel(bcName);
 
-		const returnedProm = withWorkerThreads<Pool>({
-			hello: (task) => (...args) => task(args),
-			div: (task) => (...args) => task(args),
-			helloBuffer: (task) => (...args) => task(args),
-			withPort: (task) => (port, ...rest) => task([port, ...rest], [port]),
-			externalControlled: (task) => (...args) => task(args),
-		})(path.join(__dirname, "worker.js"), {concurrency: 1})(async (pool) => {
+		const returnedProm = withWorkerThreads<Pool>(baseOperations)(path.join(__dirname, "worker.js"), {concurrency: 1})(async (pool) => {
 			const resultProm = pool!.externalControlled(bcName);
 			await new Promise((res) => {
 				bc.onmessage = (msg: any) => {
@@ -208,13 +210,7 @@ describe("timing", () => {
 		const bcName = crypto.randomUUID();
 		const bc = new BroadcastChannel(bcName);
 
-		await withWorkerThreads<Pool>({
-			hello: (task) => (...args) => task(args),
-			div: (task) => (...args) => task(args),
-			helloBuffer: (task) => (...args) => task(args),
-			withPort: (task) => (port, ...rest) => task([port, ...rest], [port]),
-			externalControlled: (task) => (...args) => task(args),
-		})(path.join(__dirname, "worker.js"), {concurrency: 1})(async (pool) => {
+		await withWorkerThreads<Pool>(baseOperations)(path.join(__dirname, "worker.js"), {concurrency: 1})(async (pool) => {
 			const resultProm = pool!.externalControlled(bcName);
 			await new Promise((res) => {
 				bc.onmessage = (msg: any) => {
@@ -231,13 +227,7 @@ describe("timing", () => {
 	});
 	it("new tasks are rejected after the argument function returned", async () => {
 		let savedPool: any;
-		await withWorkerThreads<Pool>({
-			hello: (task) => (...args) => task(args),
-			div: (task) => (...args) => task(args),
-			helloBuffer: (task) => (...args) => task(args),
-			withPort: (task) => (port, ...rest) => task([port, ...rest], [port]),
-			externalControlled: (task) => (...args) => task(args),
-		})(path.join(__dirname, "worker.js"), {concurrency: 1})(async (pool) => {
+		await withWorkerThreads<Pool>(baseOperations)(path.join(__dirname, "worker.js"), {concurrency: 1})(async (pool) => {
 			savedPool = pool;
 		})
 		await new Promise((res, rej) => {

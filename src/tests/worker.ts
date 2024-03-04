@@ -98,7 +98,7 @@ implementWorker<Pool>({
 		const res = await returnPort(...args);
 		return {
 			result: res,
-			//transfer: [res.port],
+			transfer: [res.port],
 		};
 	}
 });
